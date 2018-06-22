@@ -1,20 +1,25 @@
-package tsm1
+package tsm1_test
 
 import (
 	"fmt"
+	"math/rand"
 	"reflect"
 	"testing"
 	"testing/quick"
+
+	"github.com/google/go-cmp/cmp"
+	"github.com/influxdata/influxdb/internal/testutil"
+	"github.com/influxdata/influxdb/tsdb/engine/tsm1"
 )
 
 func Test_StringEncoder_NoValues(t *testing.T) {
-	enc := NewStringEncoder(1024)
+	enc := tsm1.NewStringEncoder(1024)
 	b, err := enc.Bytes()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var dec StringDecoder
+	var dec tsm1.StringDecoder
 	if err := dec.SetBytes(b); err != nil {
 		t.Fatalf("unexpected error creating string decoder: %v", err)
 	}
@@ -24,7 +29,7 @@ func Test_StringEncoder_NoValues(t *testing.T) {
 }
 
 func Test_StringEncoder_Single(t *testing.T) {
-	enc := NewStringEncoder(1024)
+	enc := tsm1.NewStringEncoder(1024)
 	v1 := "v1"
 	enc.Write(v1)
 	b, err := enc.Bytes()
@@ -32,8 +37,8 @@ func Test_StringEncoder_Single(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var dec StringDecoder
-	if dec.SetBytes(b); err != nil {
+	var dec tsm1.StringDecoder
+	if err := dec.SetBytes(b); err != nil {
 		t.Fatalf("unexpected error creating string decoder: %v", err)
 	}
 	if !dec.Next() {
@@ -46,7 +51,7 @@ func Test_StringEncoder_Single(t *testing.T) {
 }
 
 func Test_StringEncoder_Multi_Compressed(t *testing.T) {
-	enc := NewStringEncoder(1024)
+	enc := tsm1.NewStringEncoder(1024)
 
 	values := make([]string, 10)
 	for i := range values {
@@ -59,15 +64,15 @@ func Test_StringEncoder_Multi_Compressed(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if b[0]>>4 != stringCompressedSnappy {
-		t.Fatalf("unexpected encoding: got %v, exp %v", b[0], stringCompressedSnappy)
+	if b[0]>>4 != tsm1.StringCompressedSnappy {
+		t.Fatalf("unexpected encoding: got %v, exp %v", b[0], tsm1.StringCompressedSnappy)
 	}
 
 	if exp := 51; len(b) != exp {
 		t.Fatalf("unexpected length: got %v, exp %v", len(b), exp)
 	}
 
-	var dec StringDecoder
+	var dec tsm1.StringDecoder
 	if err := dec.SetBytes(b); err != nil {
 		t.Fatalf("unexpected erorr creating string decoder: %v", err)
 	}
@@ -93,7 +98,7 @@ func Test_StringEncoder_Quick(t *testing.T) {
 			expected = []string{}
 		}
 		// Write values to encoder.
-		enc := NewStringEncoder(1024)
+		enc := tsm1.NewStringEncoder(1024)
 		for _, v := range values {
 			enc.Write(v)
 		}
@@ -106,7 +111,7 @@ func Test_StringEncoder_Quick(t *testing.T) {
 
 		// Read values out of decoder.
 		got := make([]string, 0, len(values))
-		var dec StringDecoder
+		var dec tsm1.StringDecoder
 		if err := dec.SetBytes(buf); err != nil {
 			t.Fatal(err)
 		}
@@ -127,7 +132,7 @@ func Test_StringEncoder_Quick(t *testing.T) {
 }
 
 func Test_StringDecoder_Empty(t *testing.T) {
-	var dec StringDecoder
+	var dec tsm1.StringDecoder
 	if err := dec.SetBytes([]byte{}); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +149,7 @@ func Test_StringDecoder_CorruptRead(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		var dec StringDecoder
+		var dec tsm1.StringDecoder
 		if err := dec.SetBytes([]byte(c)); err != nil {
 			t.Fatal(err)
 		}
@@ -169,9 +174,58 @@ func Test_StringDecoder_CorruptSetBytes(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		var dec StringDecoder
+		var dec tsm1.StringDecoder
 		if err := dec.SetBytes([]byte(c)); err == nil {
 			t.Fatalf("exp an err, got nil: %q", c)
 		}
+	}
+}
+
+func BenchmarkStringDecoder_DecodeAll(b *testing.B) {
+	benchmarks := []struct {
+		n int
+		w int
+	}{
+		{1, 10},
+		{55, 10},
+		{550, 10},
+		{1000, 10},
+	}
+	for _, bm := range benchmarks {
+		b.Run(fmt.Sprintf("%d", bm.n), func(b *testing.B) {
+			rand.Seed(int64(bm.n*1e3))
+
+			s := tsm1.NewStringEncoder(bm.n)
+			for c := 0; c < bm.n; c++ {
+				s.Write(testutil.MakeSentence(bm.w))
+			}
+			s.Flush()
+			bytes, err := s.Bytes()
+			if err != nil {
+				b.Fatalf("unexpected error: %v", err)
+			}
+			dst := make([]string, bm.n)
+
+			b.ReportAllocs()
+			b.SetBytes(int64(len(bytes)))
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				var it tsm1.StringDecoder
+				if err := it.SetBytes(bytes); err != nil {
+					b.Fatalf("unexpected error creating float decoder: %v", err)
+				}
+
+				i := 0
+				for it.Next() {
+					dst[i] = it.Read()
+					i++
+				}
+
+				if len(dst) != bm.n {
+					b.Fatalf("unexpected length -got/+exp\n%s", cmp.Diff(len(dst), bm.n))
+				}
+			}
+		})
 	}
 }

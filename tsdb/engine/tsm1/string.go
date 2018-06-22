@@ -14,8 +14,8 @@ import (
 
 // Note: an uncompressed format is not yet implemented.
 
-// stringCompressedSnappy is a compressed encoding using Snappy compression
-const stringCompressedSnappy = 1
+// StringCompressedSnappy is a compressed encoding using Snappy compression
+const StringCompressedSnappy = 1
 
 // StringEncoder encodes multiple strings into a byte slice.
 type StringEncoder struct {
@@ -54,7 +54,7 @@ func (e *StringEncoder) Bytes() ([]byte, error) {
 	// Compress the currently appended bytes using snappy and prefix with
 	// a 1 byte header for future extension
 	data := snappy.Encode(nil, e.bytes)
-	return append([]byte{stringCompressedSnappy << 4}, data...), nil
+	return append([]byte{StringCompressedSnappy << 4}, data...), nil
 }
 
 // StringDecoder decodes a byte slice into strings.
